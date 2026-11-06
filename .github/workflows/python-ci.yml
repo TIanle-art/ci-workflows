@@ -1,0 +1,83 @@
+# FastAPI 等 Python 项目：Ruff、pyright、pytest、Alembic 迁移检查
+name: python-ci
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Python 项目所在目录，例如 services/api
+        type: string
+        default: "."
+      python-version:
+        type: string
+        default: "3.12"
+      postgres:
+        description: 是否启动 PostgreSQL 测试数据库
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    services:
+      postgres:
+        image: ${{ inputs.postgres && 'postgres:16' || '' }}
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 仅用于 CI 的测试数据库，不是真实密码
+      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.working-directory }}/uv.lock
+
+      - name: 安装依赖
+        run: uv sync --locked
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: pyright
+        run: uv run pyright
+
+      - name: 检查迁移只有一个 head
+        if: hashFiles(format('{0}/alembic.ini', inputs.working-directory)) != ''
+        run: |
+          out="$(uv run alembic heads)"
+          heads="$(printf '%s\n' "$out" | grep -c '(head)' || true)"
+          if [ "$heads" -gt 1 ]; then
+            echo "::error::Alembic 有 $heads 个 head，请合并迁移。"
+            printf '%s\n' "$out"
+            exit 1
+          fi
+
+      - name: 运行迁移
+        if: inputs.postgres && hashFiles(format('{0}/alembic.ini', inputs.working-directory)) != ''
+        run: uv run alembic upgrade head
+
+      - name: pytest
+        run: uv run pytest

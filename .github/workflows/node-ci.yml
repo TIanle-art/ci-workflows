@@ -1,0 +1,71 @@
+# Node 项目（网页、小程序、桌面、NestJS）：lint、类型检查、测试、构建
+# 只运行 package.json 中存在的脚本
+# 仓库根目录有 pnpm-workspace.yaml 时在根目录安装依赖，否则在 working-directory 中安装
+name: node-ci
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 项目所在目录，例如 apps/web
+        type: string
+        default: "."
+      node-version:
+        type: string
+        default: "22"
+      scripts:
+        description: 依次运行的脚本，空格分隔；不存在的脚本自动跳过
+        type: string
+        default: "lint typecheck test build"
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确定安装目录
+        id: dirs
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          if [ -f pnpm-workspace.yaml ]; then
+            echo "install=." >> "$GITHUB_OUTPUT"
+          else
+            echo "install=$WORKDIR" >> "$GITHUB_OUTPUT"
+          fi
+
+      # pnpm 版本取 package.json 中的 packageManager 字段
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ steps.dirs.outputs.install }}/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          cache-dependency-path: ${{ steps.dirs.outputs.install }}/pnpm-lock.yaml
+
+      - name: 安装依赖
+        working-directory: ${{ steps.dirs.outputs.install }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma 生成客户端
+        if: hashFiles(format('{0}/prisma/schema.prisma', inputs.working-directory)) != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm exec prisma generate
+
+      - name: 运行脚本
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          for s in $SCRIPTS; do
+            echo "::group::pnpm run $s"
+            pnpm run --if-present "$s"
+            echo "::endgroup::"
+          done
