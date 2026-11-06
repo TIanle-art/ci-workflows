@@ -40,7 +40,7 @@ jobs:
           fi
 
       # pnpm 版本取 package.json 中的 packageManager 字段
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: ${{ steps.dirs.outputs.install }}/package.json
 
