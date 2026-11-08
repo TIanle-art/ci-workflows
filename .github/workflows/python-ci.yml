@@ -1,4 +1,5 @@
 # FastAPI 等 Python 项目：Ruff、pyright、pytest、Alembic 迁移检查
+# 测试通过后，可以在仓库根目录再运行项目 Makefile 中的目标（make-targets），例如 OpenAPI 是否最新
 name: python-ci
 
 on:
@@ -10,11 +11,23 @@ on:
         default: "."
       python-version:
         type: string
-        default: "3.12"
+        default: "3.14"
       postgres:
         description: 是否启动 PostgreSQL 测试数据库
         type: boolean
         default: true
+      postgres-image:
+        description: >-
+          测试数据库的镜像，应与生产环境的 PostgreSQL 主版本一致。
+          启用 pgvector 时改为 pgvector/pgvector 的对应标签，例如 pgvector/pgvector:pg17
+        type: string
+        default: "postgres:17"
+      make-targets:
+        description: >-
+          测试通过后，在仓库根目录依次运行的 make 目标，空格分隔，例如 "openapi-check"。
+          默认为空，不运行
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -28,7 +41,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     services:
       postgres:
-        image: ${{ inputs.postgres && 'postgres:16' || '' }}
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -81,3 +94,17 @@ jobs:
 
       - name: pytest
         run: uv run pytest
+
+      # 在仓库根目录运行（job 的默认目录是 working-directory）。依赖已经在上面安装好了
+      - name: make 目标
+        if: inputs.make-targets != ''
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.make-targets }}
+        run: |
+          for target in $TARGETS; do
+            echo "::group::make $target"
+            make "$target"
+            echo "::endgroup::"
+          done
