@@ -1,9 +1,20 @@
 # main 守卫：检查 main 上的最新提交是否来自已批准的 PR
 # 免费计划的私有仓库没有分支保护，这是事后检查；失败时由技术负责人核查
+#
+# 豁免标签：只有一名维护者时，作者不能批准自己的 PR，守卫必然失败，一直红着会让人习惯性忽略。
+# 所以 PR 带有豁免标签（waiver-label，默认 review-waived）时，没有批准也通过，但会输出警告。
+# 谁可以加标签、什么情况可以加，见《团队协作开发规范》；本 workflow 不检查是谁加的标签。
+# 标签在守卫运行时读取：合并之后才加标签的，加完后重新运行这次守卫即可。
 name: main-guard
 
 on:
   workflow_call:
+    inputs:
+      waiver-label:
+        description: >-
+          带有这个标签的 PR，没有批准也算通过（输出警告）。设为空字符串则不启用豁免
+        type: string
+        default: "review-waived"
 
 permissions:
   contents: read
@@ -19,6 +30,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          WAIVER_LABEL: ${{ inputs.waiver-label }}
         run: |
           set -euo pipefail
           pr="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].number // empty')"
@@ -27,8 +39,20 @@ jobs:
             exit 1
           fi
           approved="$(gh api "repos/$REPO/pulls/$pr/reviews" --paginate --jq '.[] | select(.state == "APPROVED") | .id' | wc -l)"
-          if [ "$approved" -lt 1 ]; then
-            echo "::error::PR #$pr 合并前没有人批准，请技术负责人核查。"
-            exit 1
+          if [ "$approved" -ge 1 ]; then
+            echo "提交 $SHA 来自 PR #$pr，已有 $approved 个批准。"
+            exit 0
           fi
-          echo "提交 $SHA 来自 PR #$pr，已有 $approved 个批准。"
+
+          # 没有批准：看有没有豁免标签。
+          # 先把标签存进变量，再用 here-string 交给 grep：直接用管道把输出交给 grep -q，
+          # grep 找到后提前退出，上游命令可能收到 SIGPIPE，在 pipefail 下会被误判为失败。
+          if [ -n "$WAIVER_LABEL" ]; then
+            labels="$(gh api "repos/$REPO/pulls/$pr" --jq '.labels[].name')"
+            if grep -qxF "$WAIVER_LABEL" <<< "$labels"; then
+              echo "::warning::PR #$pr 没有人批准，但带有豁免标签 $WAIVER_LABEL，守卫放行。请技术负责人确认豁免的原因已写在 PR 中。"
+              exit 0
+            fi
+          fi
+          echo "::error::PR #$pr 合并前没有人批准。请技术负责人核查；确实没有其他审查人或属于紧急修复时，可以按《团队协作开发规范》加豁免标签 ${WAIVER_LABEL:-review-waived}（加标签后重新运行这次守卫）。"
+          exit 1

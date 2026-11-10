@@ -1,5 +1,8 @@
-# Node 项目（网页、小程序、桌面、NestJS）：lint、类型检查、测试、构建
-# 只运行 package.json 中存在的脚本
+# Node 项目（网页、小程序、桌面、NestJS）：lint、类型检查、测试、构建，可选端到端测试
+# 只运行 package.json 中存在的脚本。
+# lint 运行的是项目自己的 lint 脚本：用 Biome 还是 ESLint 由项目决定（公司统一用 Biome，
+# 见《公司项目脚手架规范》），本 workflow 不关心。
+# 端到端测试（Playwright）只有设置了 e2e-script 才会运行。
 # 仓库根目录有 pnpm-workspace.yaml 时在根目录安装依赖，否则在 working-directory 中安装
 name: node-ci
 
@@ -17,6 +20,16 @@ on:
         description: 依次运行的脚本，空格分隔；不存在的脚本自动跳过
         type: string
         default: "lint typecheck test build"
+      e2e-script:
+        description: >-
+          端到端测试的脚本名，例如 test:e2e。不为空时，在 scripts 之后先安装 Playwright 浏览器，
+          再运行 pnpm run <e2e-script>。默认为空，不运行
+        type: string
+        default: ""
+      playwright-browsers:
+        description: 要安装的 Playwright 浏览器，空格分隔（只在设置了 e2e-script 时使用）
+        type: string
+        default: "chromium"
 
 permissions:
   contents: read
@@ -69,3 +82,15 @@ jobs:
             pnpm run --if-present "$s"
             echo "::endgroup::"
           done
+
+      - name: 端到端测试（Playwright）
+        if: inputs.e2e-script != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          E2E_SCRIPT: ${{ inputs.e2e-script }}
+          BROWSERS: ${{ inputs.playwright-browsers }}
+        run: |
+          # BROWSERS 可能包含多个浏览器，需要按空格拆分
+          # shellcheck disable=SC2086
+          pnpm exec playwright install --with-deps $BROWSERS
+          pnpm run "$E2E_SCRIPT"
